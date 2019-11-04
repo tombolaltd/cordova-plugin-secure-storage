@@ -10,9 +10,12 @@ import java.security.Key;
 import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.util.Calendar;
+import java.security.cert.Certificate;
 
 import javax.crypto.Cipher;
 import javax.security.auth.x500.X500Principal;
+
+import com.crypho.plugins.ContextManager;
 
 public class RSA {
     private static final String KEYSTORE_PROVIDER = "AndroidKeyStore";
@@ -26,7 +29,8 @@ public class RSA {
         return runCipher(Cipher.DECRYPT_MODE, alias, buf);
     }
 
-    public static void createKeyPair(Context ctx, String alias) throws Exception {
+    public static void createKeyPair(String alias) throws Exception {
+        Context ctx = ContextManager.getContext();
         Calendar notBefore = Calendar.getInstance();
         Calendar notAfter = Calendar.getInstance();
         notAfter.add(Calendar.YEAR, 100);
@@ -62,16 +66,34 @@ public class RSA {
         }
     }
 
-    private static Key loadKey(int cipherMode, String alias) throws Exception {
+    private static KeyStore getKeyStore (String alias) throws Exception {
         KeyStore keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER);
-        keyStore.load(null, null);
+        keyStore.load(null);
+        return keyStore;
+
+    }
+
+    private static Key loadKey(int cipherMode, String alias) throws Exception {
+    
+        KeyStore keyStore = getKeyStore(alias);
         Key key;
         switch (cipherMode) {
             case Cipher.ENCRYPT_MODE:
-                key = keyStore.getCertificate(alias).getPublicKey();
-                if (key == null) {
-                    throw new Exception("Failed to load the public key for " + alias);
+                try {
+                    Certificate certificate = keyStore.getCertificate(alias);
+                    if(certificate == null)
+                    {
+                        createKeyPair(alias);
+                        certificate = keyStore.getCertificate(alias);                        
+                    }
+                    key = certificate.getPublicKey();
+                    if (key == null) {
+                        throw new Exception("Failed to load the public key for " + alias);
+                    }
+                } catch (Exception e) {
+                    throw e;
                 }
+                
                 break;
             case  Cipher.DECRYPT_MODE:
                 key = keyStore.getKey(alias, null);

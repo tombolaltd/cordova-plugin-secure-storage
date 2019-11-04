@@ -13,14 +13,19 @@ import android.content.Intent;
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaArgs;
 import org.apache.cordova.CordovaPlugin;
+import org.apache.cordova.CordovaInterface;
+import org.apache.cordova.CordovaWebView;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONArray;
 import javax.crypto.Cipher;
 
+import com.crypho.plugins.ContextManager;
+
 public class SecureStorage extends CordovaPlugin {
     private static final String TAG = "SecureStorage";
 
+    private static final boolean API_LEVEL_DEPRECATES_UNLOCK = Build.VERSION.SDK_INT >= 28;
     private static final boolean SUPPORTED = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP;
 
     private static final String MSG_NOT_SUPPORTED = "API 21 (Android 5.0 Lollipop) is required. This device is running API " + Build.VERSION.SDK_INT;
@@ -28,9 +33,14 @@ public class SecureStorage extends CordovaPlugin {
 
     private Hashtable<String, SharedPreferencesHandler> SERVICE_STORAGE = new Hashtable<String, SharedPreferencesHandler>();
     private String INIT_SERVICE;
-    private String INIT_PACKAGENAME;
     private volatile CallbackContext initContext, secureDeviceContext;
     private volatile boolean initContextRunning = false;
+
+    @Override
+    public void initialize(CordovaInterface cordova, CordovaWebView webView) {
+        super.initialize(cordova, webView);
+        ContextManager.initialize(cordova);
+    }   
 
     @Override
     public void onResume(boolean multitasking) {
@@ -52,7 +62,7 @@ public class SecureStorage extends CordovaPlugin {
                         if (!RSA.isEntryAvailable(alias)) {
                             //Solves Issue #96. The RSA key may have been deleted by changing the lock type.
                             getStorage(INIT_SERVICE).clear();
-                            RSA.createKeyPair(getContext(), alias);
+                            RSA.createKeyPair(alias);
                         }
                         initSuccess(initContext);
                     } catch (Exception e) {
@@ -76,23 +86,21 @@ public class SecureStorage extends CordovaPlugin {
         }
         if ("init".equals(action)) {
             String service = args.getString(0);
-            JSONObject options = args.getJSONObject(1);
-            String packageName = options.optString("packageName", getContext().getPackageName());
-
+            String packageName = getPackageNameFromInitArguments(args);
             Context ctx = null;
             
             // Solves #151. By default, we use our own ApplicationContext
             // If packageName is provided, we try to get the Context of another Application with that packageName
             try {
-                ctx = getPackageContext(packageName);
+                ctx = ContextManager.getPackageContext(packageName);
             } catch (Exception e) {
                 // This will fail if the application with given packageName is not installed
                 // OR if we do not have required permissions and cause a security violation
                 Log.e(TAG, "Init failed :", e);
                 callbackContext.error(e.getMessage());
+                return false;
             }
 
-            INIT_PACKAGENAME = ctx.getPackageName();
             String alias = service2alias(service);
             INIT_SERVICE = service;
 
@@ -163,6 +171,7 @@ public class SecureStorage extends CordovaPlugin {
         if ("secureDevice".equals(action)) {
             secureDeviceContext = callbackContext;
             unlockCredentials();
+            callbackContext.success();
             return true;
         }
         if ("remove".equals(action)) {
@@ -186,8 +195,22 @@ public class SecureStorage extends CordovaPlugin {
         return false;
     }
 
+    private String getPackageNameFromInitArguments(CordovaArgs args) throws JSONException {
+        JSONObject options; 
+        try 
+        {
+            options = args.getJSONObject(1);    
+        }
+        catch(Exception e)
+        {
+            options = new JSONObject("{}");
+        }
+        String packageName = options.optString("packageName", ContextManager.getPackageName());
+        return packageName;
+    }
+
     private boolean isDeviceSecure() {
-        KeyguardManager keyguardManager = (KeyguardManager)(getContext().getSystemService(Context.KEYGUARD_SERVICE));
+        KeyguardManager keyguardManager = (KeyguardManager)(ContextManager.getSystemService());
         try {
             Method isSecure = null;
             isSecure = keyguardManager.getClass().getMethod("isDeviceSecure");
@@ -198,7 +221,7 @@ public class SecureStorage extends CordovaPlugin {
     }
 
     private String service2alias(String service) {
-        String res = INIT_PACKAGENAME + "." + service;
+        String res = ContextManager.getPackageName() + "." + service;
         return  res;
     }
 
@@ -211,33 +234,14 @@ public class SecureStorage extends CordovaPlugin {
     }
 
     private void unlockCredentials() {
+        if (API_LEVEL_DEPRECATES_UNLOCK){
+            return;
+        }
         cordova.getActivity().runOnUiThread(new Runnable() {
             public void run() {
                 Intent intent = new Intent("com.android.credentials.UNLOCK");
-                startActivity(intent);
+                cordova.getActivity().startActivity(intent);
             }
         });
     }
-
-    private Context getContext() {
-        return cordova.getActivity().getApplicationContext();
-    }
-
-    private Context getPackageContext(String packageName) throws Exception {
-        Context pkgContext = null;
-
-        Context context = getContext();
-        if (context.getPackageName().equals(packageName)) {
-            pkgContext = context;
-        } else {
-            pkgContext = context.createPackageContext(packageName, 0);
-        }
-
-        return pkgContext;
-    }
-
-    private void startActivity(Intent intent) {
-        cordova.getActivity().startActivity(intent);
-    }
-
 }
